@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
-import com.fasterxml.jackson.annotation.JsonIgnore; // 🌟 1번 개선: 보안을 위해 추가
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 @Entity
 @Table(name = "user")
@@ -22,14 +22,18 @@ public class User {
     @Column(nullable = false, unique = true, length = 150)
     private String email;
 
-    // 🌟 1번 개선: 민감한 정보인 비밀번호가 JSON 응답에 포함되지 않도록 설정
+    /**
+     * 비밀번호 필드: @JsonIgnore를 통해 JSON 응답 시 자동 제외 (보안 강화)
+     */
     @Column(nullable = false)
     @JsonIgnore
     private String password;
 
     private Integer age;
 
-    // 🌟 2번 개선: FetchType을 LAZY로 변경하여 불필요한 조회를 방지합니다.
+    /**
+     * 선호 카테고리: 지연 로딩(FetchType.LAZY) 설정으로 성능 최적화
+     */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "preferred_category", foreignKey = @ForeignKey(name = "fk_user_category"))
     private Category preferredCategory;
@@ -37,11 +41,14 @@ public class User {
     @Column(name = "profile_image_url", length = 500)
     private String profileImageUrl;
 
-    // 🌟 3번 개선: 생성 시간은 수정되면 안 되므로 @Setter를 제거합니다.
+    /**
+     * 생성 시간: 최초 저장 시 자동 설정되며, 업데이트 불가능
+     */
     @Column(name = "created_at", updatable = false)
-    @Getter // 읽기만 가능하도록
+    @Getter // @Setter는 제거되어 불변성을 확보합니다.
     private LocalDateTime createdAt;
 
+    // 엔티티 저장 전(PrePersist)에 현재 시간을 생성 시간에 설정
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
