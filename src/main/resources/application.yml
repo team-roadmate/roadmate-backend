@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: roadmate-backend
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+server:
+  port: ${SERVER_PORT:8080}
+
+jwt:
+  # JWT_SECRET_KEY 환경 변수를 우선 사용하며, 없을 경우 기본값 사용
+  secret: ${JWT_SECRET_KEY:MySuperSecretKeyForJWTGeneration123456789012345ABCDEF}
+
+  # JWT_EXPIRATION 환경 변수를 우선 사용하며, 없을 경우 1시간(3600000ms) 기본값 사용
+  expiration: ${JWT_EXPIRATION:3600000}
