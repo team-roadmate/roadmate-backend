@@ -1,0 +1,30 @@
+name: Spring CI/CD Windows Deployment
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: 🔔 코드 체크아웃 (Checkout Code)
+        uses: actions/checkout@v4
+
+      - name: ☕ JDK 21 환경 설정
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21' # 자바 버전을 21로 설정합니다.
+          distribution: 'temurin'
+
+      - name: 📦 Gradle 빌드 실행
+        # Windows PowerShell 환경에서 Gradlew를 실행합니다.
+        run: .\gradlew clean bootJar
+
+      - name: 🚀 배포 스크립트 실행 (Windows Batch)
+        # 배포 서버(Runner)의 로컬 배치 파일을 실행합니다.
+        shell: cmd
+        run: |
+          C:\roadmate-backend\deploy.bat
