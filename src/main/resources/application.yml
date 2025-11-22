@@ -1,11 +1,19 @@
 spring:
   application:
     name: roadmate-backend
+
   datasource:
     url: ${DB_URL}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -13,13 +21,49 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+        use_sql_comments: true
+    open-in-view: false
 
 server:
   port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: always
+    include-stacktrace: on_param
 
+# JWT 설정
 jwt:
-  # JWT_SECRET_KEY 환경 변수를 우선 사용하며, 없을 경우 기본값 사용
   secret: ${JWT_SECRET_KEY:MySuperSecretKeyForJWTGeneration123456789012345ABCDEF}
-
-  # JWT_EXPIRATION 환경 변수를 우선 사용하며, 없을 경우 1시간(3600000ms) 기본값 사용
   expiration: ${JWT_EXPIRATION:3600000}
+
+# Spring Boot Actuator (헬스체크 필수!)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+
+# 로깅 설정
+logging:
+  level:
+    root: INFO
+    com.yourpackage: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  file:
+    name: ${user.home}/roadmate-backend/logs/application.log
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

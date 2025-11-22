@@ -1,0 +1,207 @@
+name: Spring Boot CI/CD with LocalTunnel
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-deploy-expose:
+    runs-on: self-hosted
+
+    env:
+      DB_URL: ${{ secrets.DB_URL }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT || '8080' }}
+      JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'MySuperSecretKeyForJWTGeneration123456789012345ABCDEF' }}
+      JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION || '3600000' }}
+      LOCALTUNNEL_SUBDOMAIN: ${{ secrets.LOCALTUNNEL_SUBDOMAIN }}
+
+    steps:
+      - name: Configure Git Safe Directory
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          git config --global --add safe.directory "${{ github.workspace }}"
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Build with Gradle
+        shell: cmd
+        run: |
+          echo Building Spring Boot application...
+          gradlew.bat clean bootJar --no-daemon
+          if errorlevel 1 exit /b 1
+
+      - name: Verify Build Output
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $jarFile = Get-ChildItem -Path ".\build\libs\*.jar" -File | Select-Object -First 1
+          if (-not $jarFile) {
+            Write-Error "JAR file not found!"
+            exit 1
+          }
+          Write-Host "Build completed: $($jarFile.Name)"
+
+      - name: Stop Existing Service
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $serviceName = "RoadmateApiService"
+          $nssmPath = "C:\nssm-2.24\win64\nssm.exe"
+
+          $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+          if ($service) {
+            Write-Host "Stopping existing service..."
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            & $nssmPath remove $serviceName confirm
+            Start-Sleep -Seconds 1
+          }
+
+          Get-Process -Name "java" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*roadmate*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Write-Host "Cleanup completed"
+
+      - name: Copy JAR to Deploy Directory
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $deployPath = "C:\roadmate-backend"
+          $logDir = "$deployPath\logs"
+
+          New-Item -ItemType Directory -Path $deployPath -Force | Out-Null
+          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+          $sourceJar = Get-ChildItem -Path ".\build\libs\*.jar" -File | Select-Object -First 1
+          Copy-Item -Path $sourceJar.FullName -Destination "$deployPath\roadmate-backend.jar" -Force
+
+          Write-Host "JAR copied to: C:\roadmate-backend\roadmate-backend.jar"
+
+      - name: Install and Start NSSM Service
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $serviceName = "RoadmateApiService"
+          $nssmPath = "C:\nssm-2.24\win64\nssm.exe"
+          $deployPath = "C:\roadmate-backend"
+
+          $javaPath = $null
+          $possiblePaths = @(
+            "$env:JAVA_HOME\bin\java.exe",
+            "C:\Program Files\Java\jdk-21\bin\java.exe",
+            "C:\Program Files\Eclipse Adoptium\jdk-21*\bin\java.exe"
+          )
+
+          foreach ($path in $possiblePaths) {
+            $resolved = Get-Item $path -ErrorAction SilentlyContinue
+            if ($resolved) {
+              $javaPath = $resolved.FullName
+              Write-Host "Java found: $javaPath"
+              break
+            }
+          }
+
+          if (-not $javaPath) {
+            Write-Error "Java not found!"
+            exit 1
+          }
+
+          $dbPassword = $env:DB_PASSWORD -replace '[&|<>^"]', '^$&'
+
+          & $nssmPath install $serviceName $javaPath
+
+          $appParams = "-jar `"$deployPath\roadmate-backend.jar`" --spring.datasource.url=$env:DB_URL --spring.datasource.username=$env:DB_USER --spring.datasource.password=$dbPassword --server.port=$env:SERVER_PORT --jwt.secret=$env:JWT_SECRET_KEY --jwt.expiration=$env:JWT_EXPIRATION"
+
+          & $nssmPath set $serviceName AppDirectory $deployPath
+          & $nssmPath set $serviceName AppParameters $appParams
+          & $nssmPath set $serviceName AppStdout "$deployPath\logs\service.out.log"
+          & $nssmPath set $serviceName AppStderr "$deployPath\logs\service.err.log"
+          & $nssmPath set $serviceName AppRotateFiles 1
+          & $nssmPath set $serviceName AppRotateBytes 10485760
+          & $nssmPath set $serviceName Start SERVICE_AUTO_START
+          & $nssmPath set $serviceName DisplayName "Roadmate API Service"
+          & $nssmPath set $serviceName Description "Spring Boot Roadmate Backend API"
+          & $nssmPath set $serviceName AppExit Default Restart
+          & $nssmPath set $serviceName AppRestartDelay 5000
+
+          Write-Host "Starting service..."
+          Start-Service -Name $serviceName -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+
+          $service = Get-Service -Name $serviceName
+          if ($service.Status -eq 'Paused') {
+            Write-Host "Service paused, resuming..."
+            & sc continue $serviceName
+            Start-Sleep -Seconds 2
+          }
+
+          $service = Get-Service -Name $serviceName
+          Write-Host "Service status: $($service.Status)"
+
+          if ($service.Status -ne 'Running') {
+            Write-Warning "Service failed to start"
+            if (Test-Path "$deployPath\logs\service.err.log") {
+              Write-Host "=== Error Log ==="
+              Get-Content "$deployPath\logs\service.err.log" -Tail 20 -ErrorAction SilentlyContinue
+            }
+          } else {
+            Write-Host "Service started successfully"
+          }
+
+      - name: Health Check
+        shell: powershell
+        continue-on-error: true
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          Write-Host "Checking application health..."
+          $maxRetries = 15
+          $retryCount = 0
+          $healthUrl = "http://localhost:$env:SERVER_PORT/actuator/health"
+
+          while ($retryCount -lt $maxRetries) {
+            try {
+              $response = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Application is running!"
+                exit 0
+              }
+            } catch {
+              $retryCount++
+              Write-Host "Waiting... ($retryCount/$maxRetries)"
+              Start-Sleep -Seconds 2
+            }
+          }
+
+          Write-Warning "Health check timeout. Check logs at C:\roadmate-backend\logs\"
+
+      - name: Deployment Summary
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "   Deployment Complete!"
+          Write-Host "========================================"
+          Write-Host ""
+          Write-Host "Service Info:"
+          Write-Host "  - Local: http://localhost:$env:SERVER_PORT"
+          Write-Host ""
+          Write-Host "Files:"
+          Write-Host "  - JAR: C:\roadmate-backend\roadmate-backend.jar"
+          Write-Host "  - Logs: C:\roadmate-backend\logs\"
+          Write-Host ""
+          Write-Host "To expose externally, run manually:"
+          Write-Host "  lt --port $env:SERVER_PORT --subdomain roadmate"
+          Write-Host ""
