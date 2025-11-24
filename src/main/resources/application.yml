@@ -6,6 +6,7 @@ spring:
     url: ${DB_URL}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
+    weather: ${WEATHER_API_KEY}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -24,6 +25,11 @@ spring:
         format_sql: true
         use_sql_comments: true
     open-in-view: false
+
+weather:
+  api:
+    key: ${WEATHER_API_KEY}
+    base-url: http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0
 
 server:
   port: ${SERVER_PORT:8080}
@@ -62,6 +68,8 @@ logging:
     com.yourpackage: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    reactor.netty.http.client: DEBUG
+    org.springframework.web.reactive.function.client: DEBUG
   file:
     name: ${user.home}/roadmate-backend/logs/application.log
   pattern:
