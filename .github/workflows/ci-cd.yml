@@ -1,4 +1,4 @@
-name: Spring Boot CI/CD with LocalTunnel
+name: Spring Boot CI/CD
 
 on:
   push:
@@ -17,7 +17,8 @@ jobs:
       SERVER_PORT: ${{ secrets.SERVER_PORT || '8080' }}
       JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'MySuperSecretKeyForJWTGeneration123456789012345ABCDEF' }}
       JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION || '3600000' }}
-      LOCALTUNNEL_SUBDOMAIN: ${{ secrets.LOCALTUNNEL_SUBDOMAIN }}
+      WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+      WALK_API_KEY: ${{ secrets.WALK_API_KEY }}
 
     steps:
       - name: Configure Git Safe Directory
@@ -118,11 +119,12 @@ jobs:
             exit 1
           }
 
+          # 특수 문자가 포함될 경우를 대비해 비밀번호에 대한 이스케이프 처리
           $dbPassword = $env:DB_PASSWORD -replace '[&|<>^"]', '^$&'
 
           & $nssmPath install $serviceName $javaPath
 
-          $appParams = "-jar `"$deployPath\roadmate-backend.jar`" --spring.datasource.url=$env:DB_URL --spring.datasource.username=$env:DB_USER --spring.datasource.password=$dbPassword --server.port=$env:SERVER_PORT --jwt.secret=$env:JWT_SECRET_KEY --jwt.expiration=$env:JWT_EXPIRATION"
+          $appParams = "-jar `"$deployPath\roadmate-backend.jar`" --spring.datasource.url=$env:DB_URL --spring.datasource.username=$env:DB_USER --spring.datasource.password=$dbPassword --server.port=$env:SERVER_PORT --jwt.secret=$env:JWT_SECRET_KEY --jwt.expiration=$env:JWT_EXPIRATION --weather.api.key=$env:WEATHER_API_KEY --walk.api.key=$env:WALK_API_KEY"
 
           & $nssmPath set $serviceName AppDirectory $deployPath
           & $nssmPath set $serviceName AppParameters $appParams
@@ -197,11 +199,15 @@ jobs:
           Write-Host ""
           Write-Host "Service Info:"
           Write-Host "  - Local: http://localhost:$env:SERVER_PORT"
+          Write-Host "  - Service Name: RoadmateApiService (NSSM)"
+          Write-Host ""
+          Write-Host "External Access Note (LocalTunnel 제거):"
+          Write-Host "  - 서버가 로컬에서 실행 중입니다. 외부에서 접속하려면 다음을 확인하세요:"
+          Write-Host "    1. **공유기 포트 포워딩** 설정이 '내부 IP(서버 PC IP):$env:SERVER_PORT'로 정확히 되어 있는지."
+          Write-Host "    2. **Windows 방화벽**의 인바운드 규칙에 '$env:SERVER_PORT' 포트(TCP)가 허용되어 있는지."
+          Write-Host "  - 접속 주소 예시: http://[귀하의 공인 IP]:$env:SERVER_PORT"
           Write-Host ""
           Write-Host "Files:"
           Write-Host "  - JAR: C:\roadmate-backend\roadmate-backend.jar"
-          Write-Host "  - Logs: C:\roadmate-backend\logs\"
-          Write-Host ""
-          Write-Host "To expose externally, run manually:"
-          Write-Host "  lt --port $env:SERVER_PORT --subdomain roadmate"
+          Write-Host "  - Logs: C:\roadmate-backend\logs\service.err.log 및 service.out.log"
           Write-Host ""
