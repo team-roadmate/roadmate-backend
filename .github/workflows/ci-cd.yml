@@ -14,7 +14,7 @@ jobs:
       DB_URL: ${{ secrets.DB_URL }}
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      SERVER_PORT: ${{ secrets.SERVER_PORT || '8080' }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT || '4080' }}
       JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY || 'MySuperSecretKeyForJWTGeneration123456789012345ABCDEF' }}
       JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION || '3600000' }}
       WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
@@ -35,8 +35,8 @@ jobs:
       - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: "21"
+          distribution: "temurin"
 
       - name: Build with Gradle
         shell: cmd
@@ -98,36 +98,33 @@ jobs:
           $nssmPath = "C:\nssm-2.24\win64\nssm.exe"
           $deployPath = "C:\roadmate-backend"
 
-          $javaPath = $null
-          $possiblePaths = @(
-            "$env:JAVA_HOME\bin\java.exe",
-            "C:\Program Files\Java\jdk-21\bin\java.exe",
-            "C:\Program Files\Eclipse Adoptium\jdk-21*\bin\java.exe"
-          )
+          # Java Path 검색 로직 (생략)
+          $javaPath = "$env:JAVA_HOME\bin\java.exe"
+          if (-not (Test-Path $javaPath)) { Write-Error "Java not found via JAVA_HOME!" ; exit 1 }
+          Write-Host "Java found: $javaPath"
 
-          foreach ($path in $possiblePaths) {
-            $resolved = Get-Item $path -ErrorAction SilentlyContinue
-            if ($resolved) {
-              $javaPath = $resolved.FullName
-              Write-Host "Java found: $javaPath"
-              break
-            }
-          }
-
-          if (-not $javaPath) {
-            Write-Error "Java not found!"
-            exit 1
-          }
-
-          # 특수 문자가 포함될 경우를 대비해 비밀번호에 대한 이스케이프 처리
+          # 특수 문자 처리는 그대로 유지
           $dbPassword = $env:DB_PASSWORD -replace '[&|<>^"]', '^$&'
 
           & $nssmPath install $serviceName $javaPath
 
-          $appParams = "-jar `"$deployPath\roadmate-backend.jar`" --spring.datasource.url=$env:DB_URL --spring.datasource.username=$env:DB_USER --spring.datasource.password=$dbPassword --server.port=$env:SERVER_PORT --jwt.secret=$env:JWT_SECRET_KEY --jwt.expiration=$env:JWT_EXPIRATION --weather.api.key=$env:WEATHER_API_KEY --walk.api.key=$env:WALK_API_KEY"
+          # 모든 Spring Property를 명시적으로 Command Line Argument로 전달
+          $appParams = "-jar `"$deployPath\roadmate-backend.jar`" "
+          $appParams += "--spring.datasource.url=$env:DB_URL "
+          $appParams += "--spring.datasource.username=$env:DB_USER "
+          $appParams += "--spring.datasource.password=$dbPassword "
+          $appParams += "--server.port=$env:SERVER_PORT "
+
+          # YML 파일의 경로에 맞게 Property 이름 수정: seoul.api.key
+          $appParams += "--weather.api.key=$env:WEATHER_API_KEY "
+          $appParams += "--seoul.api.key=$env:WALK_API_KEY " 
+
+          $appParams += "--jwt.secret=$env:JWT_SECRET_KEY "
+          $appParams += "--jwt.expiration=$env:JWT_EXPIRATION"
+
 
           & $nssmPath set $serviceName AppDirectory $deployPath
-          & $nssmPath set $serviceName AppParameters $appParams
+          & $nssmPath set $serviceName AppParameters $appParams # 수정된 $appParams 사용
           & $nssmPath set $serviceName AppStdout "$deployPath\logs\service.out.log"
           & $nssmPath set $serviceName AppStderr "$deployPath\logs\service.err.log"
           & $nssmPath set $serviceName AppRotateFiles 1
@@ -136,7 +133,7 @@ jobs:
           & $nssmPath set $serviceName DisplayName "Roadmate API Service"
           & $nssmPath set $serviceName Description "Spring Boot Roadmate Backend API"
           & $nssmPath set $serviceName AppExit Default Restart
-          & $nssmPath set $serviceName AppRestartDelay 5000
+          & $nssmPath set $serviceName AppRestartDelay 5000 
 
           Write-Host "Starting service..."
           Start-Service -Name $serviceName -ErrorAction SilentlyContinue
