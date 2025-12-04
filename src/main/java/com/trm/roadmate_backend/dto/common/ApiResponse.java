@@ -9,7 +9,6 @@ public class ApiResponse<T> {
 
     private final boolean success; // API 요청 성공 여부
     private final String message;  // 응답 메시지
-    private final String errorCode; // 에러 코드 (선택 사항, 실패 시 사용)
     private final T data;          // 실제 응답 데이터
 
     /**
@@ -23,13 +22,12 @@ public class ApiResponse<T> {
         return ApiResponse.<T>builder()
                 .success(true)
                 .message(message)
-                .errorCode(null) // 성공 시 에러 코드는 null
                 .data(data)
                 .build();
     }
 
     /**
-     * 실패 응답을 생성하는 정적 팩토리 메서드 (에러 코드 없음)
+     * 실패 응답을 생성하는 정적 팩토리 메서드 (데이터는 null로 설정)
      * @param message 응답 메시지 (주로 에러 메시지)
      * @param <T> 데이터의 타입
      * @return 실패 응답 객체
@@ -37,24 +35,6 @@ public class ApiResponse<T> {
     public static <T> ApiResponse<T> failure(String message) {
         return ApiResponse.<T>builder()
                 .success(false)
-                .message(message)
-                .errorCode(null) // 에러 코드가 없는 경우
-                .data(null)
-                .build();
-    }
-
-    /**
-     * 실패 응답을 생성하는 정적 팩토리 메서드 (에러 코드 포함)
-     * @param errorCode 내부적으로 정의된 에러 코드 (예: "TOKEN_401", "USER_NOT_FOUND")
-     * @param message 응답 메시지 (주로 에러 메시지)
-     * @param <T> 데이터의 타입
-     * @return 실패 응답 객체
-     * **신규 추가된 메서드입니다.**
-     */
-    public static <T> ApiResponse<T> error(String errorCode, String message) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .errorCode(errorCode)
                 .message(message)
                 .data(null)
                 .build();

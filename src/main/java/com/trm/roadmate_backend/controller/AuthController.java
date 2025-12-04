@@ -3,20 +3,17 @@ package com.trm.roadmate_backend.controller;
 import com.trm.roadmate_backend.config.JwtUtil;
 import com.trm.roadmate_backend.dto.SignupRequest;
 import com.trm.roadmate_backend.dto.LoginRequest;
-import com.trm.roadmate_backend.dto.common.ApiResponse; // ApiResponse 임포트
+import com.trm.roadmate_backend.dto.common.ApiResponse;
 import com.trm.roadmate_backend.service.UserService;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import io.jsonwebtoken.JwtException;
 
-import java.util.HashMap;
 import java.util.Map;
-import lombok.RequiredArgsConstructor;
+import lombok.RequiredArgsConstructor; // Lombok을 사용하여 생성자 주입 간결화
 
 @RestController
 @RequestMapping("/api/auth")
-@RequiredArgsConstructor
+@RequiredArgsConstructor // final 필드에 대한 생성자 주입
 public class AuthController {
 
     private final UserService userService;
@@ -27,76 +24,34 @@ public class AuthController {
      */
     @PostMapping("/signup")
     public ResponseEntity<ApiResponse<Void>> signup(@RequestBody SignupRequest request) {
+        // UserService를 통해 사용자 등록 (비밀번호 암호화 포함)
         userService.registerUser(request.getName(), request.getEmail(), request.getPassword());
+
+        // API 표준 응답 (200 OK, 데이터 없음)
         return ResponseEntity.ok(ApiResponse.success("회원가입 성공", null));
     }
 
     /**
-     * [POST] /api/auth/login : 로그인 엔드포인트 (ACCESS + REFRESH 토큰 발급)
+     * [POST] /api/auth/login : 로그인 엔드포인트 (JWT 토큰 발급)
      */
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<Map<String, String>>> login(@RequestBody LoginRequest request) {
+        // 1. UserService를 통해 사용자 인증
         var user = userService.login(request.getEmail(), request.getPassword());
 
-        String accessToken = jwtUtil.generateAccessToken(user.getEmail());
-        String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
+        // 2. JWT 토큰 생성
+        String token = jwtUtil.generateToken(user.getEmail());
 
-        // TODO: [중요] 실제 운영 환경에서는, 발급된 Refresh Token을 사용자 정보와 함께 DB 또는 Redis에 저장하여 관리해야 합니다.
+        // 3. 토큰을 Map에 담아 반환 (키: accessToken)
+        Map<String, String> tokenMap = Map.of("accessToken", token);
 
-        Map<String, String> tokenMap = Map.of(
-                "accessToken", accessToken,
-                "refreshToken", refreshToken
-        );
-
+        // API 표준 응답 (200 OK, 토큰 데이터 포함)
         return ResponseEntity.ok(ApiResponse.success("로그인 성공", tokenMap));
     }
 
     /**
-     * [POST] /api/auth/refresh : 액세스 토큰 재발급 엔드포인트
-     * **수정 부분:** ApiResponse.error() 사용
-     */
-    @PostMapping("/refresh")
-    public ResponseEntity<ApiResponse<Map<String, String>>> refresh(@RequestBody Map<String, String> request) {
-        String refreshToken = request.get("refreshToken");
-
-        if (refreshToken == null) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    // ApiResponse.error()를 사용하여 에러 코드 포함
-                    .body(ApiResponse.error("REFRESH_TOKEN_MISSING", "리프레시 토큰이 누락되었습니다."));
-        }
-
-        try {
-            if (!jwtUtil.validateToken(refreshToken)) {
-                // 토큰 만료 또는 변조 시
-                return ResponseEntity
-                        .status(HttpStatus.UNAUTHORIZED) // 401 Unauthorized
-                        // ApiResponse.error()를 사용하여 에러 코드 포함
-                        .body(ApiResponse.error("REFRESH_TOKEN_INVALID", "리프레시 토큰이 유효하지 않거나 만료되었습니다. 재로그인이 필요합니다."));
-            }
-
-            String email = jwtUtil.extractEmail(refreshToken);
-
-            // TODO: [중요] 실제 운영 환경에서는, 추출된 이메일을 기반으로 DB/Redis에 저장된 Refresh Token과 일치하는지 확인해야 합니다.
-
-            String newAccessToken = jwtUtil.generateAccessToken(email);
-
-            Map<String, String> tokenMap = new HashMap<>();
-            tokenMap.put("accessToken", newAccessToken);
-
-            return ResponseEntity.ok(ApiResponse.success("새 액세스 토큰이 발급되었습니다.", tokenMap));
-
-        } catch (JwtException e) {
-            return ResponseEntity
-                    .status(HttpStatus.UNAUTHORIZED)
-                    // ApiResponse.error()를 사용하여 에러 코드 포함
-                    .body(ApiResponse.error("TOKEN_PARSING_ERROR", "토큰 파싱 오류: 유효하지 않은 토큰 형식입니다."));
-        }
-    }
-
-
-    /**
      * [GET] /api/auth/test : JWT 인증 테스트 엔드포인트
+     * SecurityConfig에 의해 인증된 사용자만 접근 가능
      */
     @GetMapping("/test")
     public ResponseEntity<ApiResponse<String>> test() {

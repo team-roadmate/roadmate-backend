@@ -18,11 +18,12 @@ public class PathFindingService {
      * 경로 탐색 메인 메서드
      */
     public PathResponse findPath(PathRequest request) {
-        log.info("경로 탐색 요청: ({}, {}) → ({}, {})",
+        log.info("경로 탐색 시작: ({}, {}) → ({}, {})",
                 request.getStartLat(), request.getStartLng(),
                 request.getEndLat(), request.getEndLng());
 
         try {
+            // 1. 그래프 확인
             if (graphService.isEmpty()) {
                 return PathResponse.builder()
                         .message("그래프 데이터가 없습니다. 먼저 지역 데이터를 수집하세요.")
@@ -40,27 +41,25 @@ public class PathFindingService {
             }
 
             log.info("시작 노드: {}, 종료 노드: {}", startNodeId, endNodeId);
-            log.info("경로 탐색 시작: ({}) → ({}) (Mode: Dijkstra)", startNodeId, endNodeId);
-
 
             // 3. 다익스트라 알고리즘으로 경로 탐색
-            DijkstraResult result = findDijkstraPath(startNodeId, endNodeId);
+            List<String> pathNodeIds = dijkstra(startNodeId, endNodeId, request);
 
-            if (result.pathNodeIds.isEmpty()) {
+            if (pathNodeIds.isEmpty()) {
                 return PathResponse.builder()
                         .message("경로를 찾을 수 없습니다.")
                         .build();
             }
 
             // 4. 노드 ID → 좌표 변환
-            List<Coordinate> coordinates = result.pathNodeIds.stream()
+            List<Coordinate> coordinates = pathNodeIds.stream()
                     .map(nodeId -> graphService.getNode(nodeId))
                     .filter(Objects::nonNull)
                     .map(node -> new Coordinate(node.getLat(), node.getLng()))
                     .toList();
 
-            // 5. 총 거리 계산 (다익스트라가 계산한 최종 최단 거리)
-            double totalDistance = result.getTotalDistance();
+            // 5. 총 거리 계산
+            double totalDistance = calculateTotalDistance(pathNodeIds);
 
             // 6. 예상 시간 계산 (1.2m/s 보행 속도)
             int duration = (int) (totalDistance / 1.2);
@@ -84,70 +83,85 @@ public class PathFindingService {
     }
 
     /**
-     * 다익스트라 알고리즘 실행
+     * 다익스트라 알고리즘
      */
-    private DijkstraResult findDijkstraPath(String start, String end) {
-        Map<String, Double> dist = new HashMap<>();
+    private List<String> dijkstra(String start, String end, PathRequest request) {
+        Map<String, Double> distances = new HashMap<>();
         Map<String, String> previous = new HashMap<>();
         PriorityQueue<NodeDistance> pq = new PriorityQueue<>();
+        Set<String> visited = new HashSet<>();
 
         // 초기화
-        dist.put(start, 0.0);
+        distances.put(start, 0.0);
         pq.offer(new NodeDistance(start, 0.0));
 
-        // 🔍 추가: 시작 노드의 연결 상태 확인
-        List<Edge> startEdges = graphService.getEdges(start);
-        log.info("시작 노드 {} 연결 개수: {}", start, startEdges.size());
-        if (!startEdges.isEmpty()) {
-            log.info("시작 노드 첫 3개 연결: {}",
-                    startEdges.stream().limit(3).map(Edge::getTargetNodeId).toList());
-        }
-
-        List<Edge> endEdges = graphService.getEdges(end);
-        log.info("종료 노드 {} 연결 개수: {}", end, endEdges.size());
-
-        int visitedCount = 0; // 🔍 추가: 방문한 노드 개수
-        int maxQueueSize = 0; // 🔍 추가: 큐 최대 크기
-
         while (!pq.isEmpty()) {
-            maxQueueSize = Math.max(maxQueueSize, pq.size());
             NodeDistance current = pq.poll();
-            String currentNodeId = current.nodeId;
+            String currentNode = current.nodeId;
 
-            visitedCount++; // 🔍 추가
+            // 이미 방문한 노드는 스킵
+            if (visited.contains(currentNode)) {
+                continue;
+            }
+            visited.add(currentNode);
 
             // 목적지 도착
-            if (currentNodeId.equals(end)) {
-                double finalDistance = dist.get(end);
-                log.info("✅ 경로 발견! 방문 노드: {}, 최대 큐: {}", visitedCount, maxQueueSize);
-                return new DijkstraResult(reconstructPath(previous, start, end), finalDistance);
-            }
-
-            // 이미 더 짧은 경로가 발견된 경우 스킵
-            if (current.getDistance() > dist.getOrDefault(currentNodeId, Double.MAX_VALUE)) {
-                continue;
+            if (currentNode.equals(end)) {
+                break;
             }
 
             // 인접 노드 탐색
-            List<Edge> edges = graphService.getEdges(currentNodeId);
+            List<Edge> edges = graphService.getEdges(currentNode);
             for (Edge edge : edges) {
-                String nextNodeId = edge.getTargetNodeId();
-                double weight = edge.getDistance();
+                String nextNode = edge.getTargetNodeId();
 
-                double newDist = dist.get(currentNodeId) + weight;
+                if (visited.contains(nextNode)) {
+                    continue;
+                }
 
-                if (newDist < dist.getOrDefault(nextNodeId, Double.MAX_VALUE)) {
-                    dist.put(nextNodeId, newDist);
-                    previous.put(nextNodeId, currentNodeId);
-                    pq.offer(new NodeDistance(nextNodeId, newDist));
+                // 가중치 계산 (옵션 적용)
+                double weight = calculateWeight(edge, request);
+                double newDist = distances.get(currentNode) + weight;
+
+                if (newDist < distances.getOrDefault(nextNode, Double.MAX_VALUE)) {
+                    distances.put(nextNode, newDist);
+                    previous.put(nextNode, currentNode);
+                    pq.offer(new NodeDistance(nextNode, newDist));
                 }
             }
         }
 
-        // 경로를 찾지 못한 경우
-        log.error("❌ Dijkstra 탐색 실패: 방문 노드 {}, 최대 큐 {}, 탐색한 고유 노드 {}",
-                visitedCount, maxQueueSize, dist.size());
-        return new DijkstraResult(Collections.emptyList(), 0.0);
+        // 경로 재구성
+        return reconstructPath(previous, start, end);
+    }
+
+    /**
+     * 가중치 계산 (사용자 옵션 적용)
+     */
+    private double calculateWeight(Edge edge, PathRequest request) {
+        double weight = edge.getDistance(); // 기본은 거리
+
+        // 공원 선호
+        if (Boolean.TRUE.equals(request.getPreferPark()) && Boolean.TRUE.equals(edge.getIsPark())) {
+            weight *= 0.7; // 30% 할인
+        }
+
+        // 육교 피하기
+        if (Boolean.TRUE.equals(request.getAvoidOverpass()) && Boolean.TRUE.equals(edge.getIsOverpass())) {
+            weight *= 1.5; // 50% 증가
+        }
+
+        // 터널 피하기
+        if (Boolean.TRUE.equals(request.getAvoidTunnel()) && Boolean.TRUE.equals(edge.getIsTunnel())) {
+            weight *= 1.5;
+        }
+
+        // 실내 선호 (비 오는 날)
+        if (Boolean.TRUE.equals(request.getPreferIndoor()) && Boolean.TRUE.equals(edge.getIsBuilding())) {
+            weight *= 0.8;
+        }
+
+        return weight;
     }
 
     /**
@@ -157,6 +171,7 @@ public class PathFindingService {
         List<String> path = new ArrayList<>();
         String current = end;
 
+        // 역순으로 경로 추적
         while (current != null) {
             path.add(current);
             if (current.equals(start)) {
@@ -165,10 +180,12 @@ public class PathFindingService {
             current = previous.get(current);
         }
 
-        if (path.isEmpty() || !path.get(path.size() - 1).equals(start)) {
+        // 경로가 끊긴 경우
+        if (!path.get(path.size() - 1).equals(start)) {
             return Collections.emptyList();
         }
 
+        // 올바른 순서로 뒤집기
         Collections.reverse(path);
         return path;
     }
@@ -183,6 +200,30 @@ public class PathFindingService {
                 ))
                 .map(Node::getId)
                 .orElse(null);
+    }
+
+    /**
+     * 총 거리 계산
+     */
+    private double calculateTotalDistance(List<String> pathNodeIds) {
+        double total = 0.0;
+
+        for (int i = 0; i < pathNodeIds.size() - 1; i++) {
+            String currentId = pathNodeIds.get(i);
+            String nextId = pathNodeIds.get(i + 1);
+
+            Node current = graphService.getNode(currentId);
+            Node next = graphService.getNode(nextId);
+
+            if (current != null && next != null) {
+                total += calculateDistance(
+                        current.getLat(), current.getLng(),
+                        next.getLat(), next.getLng()
+                );
+            }
+        }
+
+        return total;
     }
 
     /**
@@ -206,35 +247,14 @@ public class PathFindingService {
     // ===== 내부 클래스 =====
 
     @Data
-    private static class DijkstraResult {
-        List<String> pathNodeIds;
-        double totalDistance;
-
-        public DijkstraResult(List<String> pathNodeIds, double totalDistance) {
-            this.pathNodeIds = pathNodeIds;
-            this.totalDistance = totalDistance;
-        }
-    }
-
-    @Data
     @AllArgsConstructor
     private static class NodeDistance implements Comparable<NodeDistance> {
         private String nodeId;
         private Double distance;
 
-        public Double getDistance() {
-            return this.distance;
-        }
-
         @Override
         public int compareTo(NodeDistance other) {
-            // 1. 거리가 짧은 순서로 정렬
-            int distComparison = Double.compare(this.getDistance(), other.getDistance());
-            if (distComparison != 0) {
-                return distComparison;
-            }
-            // 💡 [핵심 수정] 거리가 같을 경우, nodeId를 기준으로 비교하여 PriorityQueue 안정성 확보
-            return this.nodeId.compareTo(other.nodeId);
+            return Double.compare(this.distance, other.distance);
         }
     }
 }

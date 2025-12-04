@@ -9,13 +9,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
-
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
-
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -24,13 +19,9 @@ public class DataCollectionService {
 
     private final WalkingNodeRepository nodeRepository;
     private final WalkingLinkRepository linkRepository;
-    private final DistrictRepository districtRepository;
+    private final CollectedDistrictRepository districtRepository;
     private final RestTemplate restTemplate;
 
-    @PersistenceContext
-    private final EntityManager em;
-
-    // --- @Value fields (apiKey, baseUrl, serviceName, requestDelayMs) ---
     @Value("${seoul.api.key}")
     private String apiKey;
 
@@ -40,306 +31,165 @@ public class DataCollectionService {
     @Value("${seoul.api.service-name}")
     private String serviceName;
 
-    @Value("${seoul.api.request-delay-ms:1000}")
-    private long requestDelayMs;
-
     /**
-     * collectDistrict: XML 원본 구조에 맞게 노드와 링크를 분리하여 저장 (최종)
+     * 특정 구역 데이터 수집
      */
     @Transactional
     public CollectionResponse collectDistrict(String districtName) {
-        log.info("=== {} 데이터 수집 시작 (2단계 전략) ===", districtName);
+        log.info("=== {} 데이터 수집 시작 ===", districtName);
 
         try {
-            // 1) 기존 데이터 삭제
+            // 1. 기존 데이터 삭제 (재수집인 경우)
             if (districtRepository.existsByDistrictName(districtName)) {
                 log.info("기존 {} 데이터 삭제 중...", districtName);
-                linkRepository.deleteByDistrictFast(districtName);
-                nodeRepository.deleteByDistrictFast(districtName);
+                nodeRepository.deleteByDistrict(districtName);
+                linkRepository.deleteByDistrict(districtName);
             }
 
+            // 2. API 호출 및 데이터 수집
             int startIndex = 1;
             int pageSize = 1000;
             int totalNodes = 0;
             int totalLinks = 0;
 
-            // ===== 1단계: 모든 노드 먼저 수집 =====
-            log.info("1단계: 노드 수집 시작");
-            Set<String> allNodeIds = new HashSet<>();
-            startIndex = 1;
+            Set<String> allProcessedNodes = new HashSet<>();  // 전체 수집 과정에서 중복 체크
 
             while (true) {
                 String url = buildApiUrl(startIndex, startIndex + pageSize - 1, districtName);
+                log.debug("API 호출: {}", url);
+
                 SeoulApiResponse response = restTemplate.getForObject(url, SeoulApiResponse.class);
+
+                log.info("API 응답 받음: response={}", response != null ? "OK" : "NULL");
+                if (response != null) {
+                    log.info("TbTraficWlkNet: {}", response.getTbTraficWlkNet() != null ? "OK" : "NULL");
+                    if (response.getTbTraficWlkNet() != null) {
+                        log.info("RESULT: {}", response.getTbTraficWlkNet().getRESULT());
+                        log.info("list_total_count: {}", response.getTbTraficWlkNet().getList_total_count());
+                        log.info("row size: {}", response.getTbTraficWlkNet().getRow() != null ? response.getTbTraficWlkNet().getRow().size() : "NULL");
+                    }
+                }
 
                 if (response == null ||
                         response.getTbTraficWlkNet() == null ||
                         response.getTbTraficWlkNet().getRow() == null ||
                         response.getTbTraficWlkNet().getRow().isEmpty()) {
+                    log.info("더 이상 데이터 없음. 수집 완료");
                     break;
                 }
 
                 List<SeoulApiResponse.Row> rows = response.getTbTraficWlkNet().getRow();
+                log.info("페이지 데이터 수: {}", rows.size());
+
+                // 3. 데이터 파싱 및 저장
                 List<WalkingNode> nodesToSave = new ArrayList<>();
-                Set<String> pageNodeIds = new HashSet<>();
-
-                // NODE 타입만 처리
-                for (SeoulApiResponse.Row row : rows) {
-                    String nodeType = row.getNODE_TYPE();
-                    if (nodeType != null && "NODE".equalsIgnoreCase(nodeType.trim())) {
-                        String nodeId = normalizeId(row.getNODE_ID());
-                        if (row.getNODE_WKT() != null && !row.getNODE_WKT().isEmpty()
-                                && pageNodeIds.add(nodeId)) {
-                            nodesToSave.add(createNodeFromApiRow(row, districtName));
-                        }
-                    }
-                }
-
-                // DB 중복 체크 및 저장
-                if (!nodesToSave.isEmpty()) {
-                    Set<String> nodeIdsPage = nodesToSave.stream()
-                            .map(WalkingNode::getNodeId)
-                            .collect(Collectors.toSet());
-
-                    List<WalkingNode> exist = nodeRepository.findByNodeIdIn(nodeIdsPage);
-                    Set<String> existIds = exist.stream()
-                            .map(WalkingNode::getNodeId)
-                            .collect(Collectors.toSet());
-
-                    List<WalkingNode> filteredNodes = nodesToSave.stream()
-                            .filter(n -> !existIds.contains(n.getNodeId()))
-                            .collect(Collectors.toList());
-
-                    if (!filteredNodes.isEmpty()) {
-                        nodeRepository.saveAll(filteredNodes);
-                        em.flush();
-
-                        filteredNodes.forEach(n -> allNodeIds.add(n.getNodeId()));
-                        totalNodes += filteredNodes.size();
-                        log.info("노드 배치 저장: {} 건 (누적: {})", filteredNodes.size(), totalNodes);
-                    }
-                }
-
-                em.clear();
-                startIndex += pageSize;
-                Thread.sleep(requestDelayMs);
-            }
-
-            log.info("1단계 완료: 총 {} 개 노드 수집", totalNodes);
-
-            // ===== 2단계: 모든 링크 수집 (이제 모든 노드가 DB에 존재) =====
-            log.info("2단계: 링크 수집 시작");
-            startIndex = 1;
-
-            // 2단계에서 임시로 생성되어 저장될 노드 목록
-            List<WalkingNode> newNodesFromLinks = new ArrayList<>();
-
-            while (true) {
-                String url = buildApiUrl(startIndex, startIndex + pageSize - 1, districtName);
-                SeoulApiResponse response = restTemplate.getForObject(url, SeoulApiResponse.class);
-
-                if (response == null ||
-                        response.getTbTraficWlkNet() == null ||
-                        response.getTbTraficWlkNet().getRow() == null ||
-                        response.getTbTraficWlkNet().getRow().isEmpty()) {
-                    break;
-                }
-
-                List<SeoulApiResponse.Row> rows = response.getTbTraficWlkNet().getRow();
                 List<WalkingLink> linksToSave = new ArrayList<>();
-                Set<String> pageLinkIds = new HashSet<>();
 
-                // --- 수정: 링크를 기반으로 누락된 노드 생성 및 저장 로직 ---
                 for (SeoulApiResponse.Row row : rows) {
-                    String nodeType = row.getNODE_TYPE();
-                    if (nodeType != null && "LINK".equalsIgnoreCase(nodeType.trim())) {
-                        String startNodeId = normalizeId(row.getBGNG_LNKG_ID());
-                        String endNodeId = normalizeId(row.getEND_LNKG_ID());
-                        String linkId = normalizeId(row.getLNKG_ID());
-                        String linkWkt = row.getLNKG_WKT();
+                    // 링크 처리
+                    if (row.getLNKG_WKT() != null && !row.getLNKG_WKT().isEmpty()) {
+                        // 링크의 시작점/끝점에서 노드 생성
+                        String startNodeId = row.getBGNG_LNKG_ID();
+                        String endNodeId = row.getEND_LNKG_ID();
 
-                        if (linkId == null || linkWkt == null) continue;
+                        // 링크의 좌표에서 시작/끝 노드 추출
+                        List<double[]> coords = parseLineString(row.getLNKG_WKT());
 
-                        double[] coords = parseLineString(linkWkt);
-                        if (coords.length != 4) continue; // 좌표 파싱 실패
-
-                        boolean startNodeMissing = !allNodeIds.contains(startNodeId);
-                        boolean endNodeMissing = !allNodeIds.contains(endNodeId);
-
-                        // 3. 누락된 노드 생성
-                        if (startNodeMissing) {
-                            // 시작 노드 생성
-                            if (allNodeIds.add(startNodeId)) { // Set에 추가 성공했다면 DB에도 없는 노드
-                                WalkingNode newNode = createBoundaryNode(startNodeId, districtName, coords[0], coords[1]);
-                                newNodesFromLinks.add(newNode);
-                                log.warn("링크 기반 시작 노드 생성 및 추가: {}", startNodeId);
+                        if (!coords.isEmpty()) {
+                            // 시작 노드 (전체 수집 과정에서 중복 체크)
+                            if (!allProcessedNodes.contains(startNodeId)) {
+                                nodesToSave.add(createNodeFromCoords(startNodeId, coords.get(0), districtName, row));
+                                allProcessedNodes.add(startNodeId);
+                                totalNodes++;
                             }
-                        }
-                        if (endNodeMissing) {
-                            // 종료 노드 생성
-                            if (allNodeIds.add(endNodeId)) { // Set에 추가 성공했다면 DB에도 없는 노드
-                                WalkingNode newNode = createBoundaryNode(endNodeId, districtName, coords[2], coords[3]);
-                                newNodesFromLinks.add(newNode);
-                                log.warn("링크 기반 종료 노드 생성 및 추가: {}", endNodeId);
+
+                            // 끝 노드
+                            if (!allProcessedNodes.contains(endNodeId)) {
+                                nodesToSave.add(createNodeFromCoords(endNodeId, coords.get(coords.size() - 1), districtName, row));
+                                allProcessedNodes.add(endNodeId);
+                                totalNodes++;
                             }
+
+                            // 링크 생성
+                            linksToSave.add(createLink(row, districtName));
+                            totalLinks++;
                         }
                     }
                 }
 
-                // 4. 생성된 노드 배치 저장 (필수!)
-                if (!newNodesFromLinks.isEmpty()) {
-                    nodeRepository.saveAll(newNodesFromLinks);
-                    em.flush();
-                    totalNodes += newNodesFromLinks.size();
-                    log.info("링크 기반 노드 배치 저장: {} 건 (누적 노드: {})", newNodesFromLinks.size(), totalNodes);
-                    newNodesFromLinks.clear(); // 목록 초기화
-                }
-                em.clear();
-                // --- 수정 끝 ---
-
-                // --- 기존 링크 저장 로직 (이제 allNodeIds는 새로 생성된 노드를 포함) ---
-                for (SeoulApiResponse.Row row : rows) {
-                    String nodeType = row.getNODE_TYPE();
-                    if (nodeType != null && "LINK".equalsIgnoreCase(nodeType.trim())) {
-                        String startNodeId = normalizeId(row.getBGNG_LNKG_ID());
-                        String endNodeId = normalizeId(row.getEND_LNKG_ID());
-                        String linkId = normalizeId(row.getLNKG_ID());
-
-                        // 양쪽 노드가 존재하는지 확인 (새로 생성된 노드까지 모두 포함됨)
-                        if (linkId != null && pageLinkIds.add(linkId)
-                                && allNodeIds.contains(startNodeId)
-                                && allNodeIds.contains(endNodeId)) {
-                            linksToSave.add(createLinkFromApiRow(row, districtName,
-                                    startNodeId, endNodeId, linkId));
-                        } else if (linkId != null) {
-                            // **이 경고는 노드 생성 후에도 NodeId나 LinkId가 null이거나 중복된 경우만 발생**
-                            log.warn("링크 스킵 (NodeId/LinkId 문제): {} -> {}", startNodeId, endNodeId);
-                        }
-                    }
+                // 배치 저장 (노드 먼저, 링크 나중에)
+                if (!nodesToSave.isEmpty()) {
+                    nodeRepository.saveAll(nodesToSave);
+                    log.info("노드 {} 개 저장 완료", nodesToSave.size());
                 }
 
-                // DB 중복 체크 및 저장
                 if (!linksToSave.isEmpty()) {
-                    Set<String> linkIdsPage = linksToSave.stream()
-                            .map(WalkingLink::getLinkId)
-                            .collect(Collectors.toSet());
-
-                    List<WalkingLink> existLinks = linkRepository.findByLinkIdIn(linkIdsPage);
-                    Set<String> existLinkIds = existLinks.stream()
-                            .map(WalkingLink::getLinkId)
-                            .collect(Collectors.toSet());
-
-                    List<WalkingLink> filteredLinks = linksToSave.stream()
-                            .filter(l -> !existLinkIds.contains(l.getLinkId()))
-                            .collect(Collectors.toList());
-
-                    if (!filteredLinks.isEmpty()) {
-                        linkRepository.saveAll(filteredLinks);
-                        em.flush();
-                        totalLinks += filteredLinks.size();
-                        log.info("링크 배치 저장: {} 건 (누적: {})", filteredLinks.size(), totalLinks);
-                    }
+                    linkRepository.saveAll(linksToSave);
+                    log.info("링크 {} 개 저장 완료", linksToSave.size());
                 }
 
-                em.clear();
+                // 4. 다음 페이지로
                 startIndex += pageSize;
-                Thread.sleep(requestDelayMs);
+
+                // API 호출 제한 방지 (1초 대기)
+                Thread.sleep(1000);
             }
 
-            log.info("2단계 완료: 총 {} 개 링크 수집", totalLinks);
-
-            // 최종 결과 저장
+            // 5. 수집 정보 저장
             saveCollectedDistrict(districtName, totalNodes, totalLinks);
+
+            log.info("=== {} 데이터 수집 완료: 노드 {}, 링크 {} ===",
+                    districtName, totalNodes, totalLinks);
 
             return CollectionResponse.builder()
                     .district(districtName)
                     .nodeCount(totalNodes)
                     .linkCount(totalLinks)
-                    .message("데이터 수집 완료 (2단계 전략 및 노드 자동 보정)")
+                    .message("데이터 수집 완료")
                     .success(true)
                     .build();
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("데이터 수집 중 스레드 인터럽트", e);
-            throw new RuntimeException("수집 중단", e);
         } catch (Exception e) {
-            log.error("데이터 수집 실패", e);
-            throw new RuntimeException("데이터 수집 실패", e);
+            log.error("데이터 수집 실패: {}", e.getMessage(), e);
+            return CollectionResponse.builder()
+                    .district(districtName)
+                    .message("데이터 수집 실패: " + e.getMessage())
+                    .success(false)
+                    .build();
         }
     }
 
-    // normalizeId, createNodeFromApiRow, createLinkFromApiRow 등은 동일
-    private String normalizeId(String raw) {
-        if (raw == null) return null;
-        String s = raw.trim();
-        if (s.matches("^\\d+\\.0+$")) {
-            s = s.substring(0, s.indexOf('.'));
-        }
-        if (s.contains(".")) {
-            try {
-                double d = Double.parseDouble(s);
-                long asLong = (long) d;
-                if (Double.compare(d, (double) asLong) == 0) {
-                    s = String.valueOf(asLong);
-                }
-            } catch (NumberFormatException ignored) {}
-        }
-        return s;
-    }
-
-    private WalkingNode createNodeFromApiRow(SeoulApiResponse.Row row, String district) {
-        double[] coords = parsePoint(row.getNODE_WKT());
-        if (coords.length == 0) {
-            coords = new double[]{0.0, 0.0};
-        }
-
+    /**
+     * 좌표로부터 노드 생성 (저장 안 함)
+     */
+    private WalkingNode createNodeFromCoords(String nodeId, double[] coords, String districtName, SeoulApiResponse.Row row) {
         return WalkingNode.builder()
-                .nodeId(normalizeId(row.getNODE_ID()))
-                .longitude(coords[0])
-                .latitude(coords[1])
-                .district(district)
-                .nodeType(row.getNODE_TYPE())
+                .nodeId(nodeId)
+                .latitude(coords[1])  // lat
+                .longitude(coords[0]) // lng
+                .nodeType("교차점")
+                .district(districtName)
                 .neighborhood(row.getEMD_NM())
-                .isCrosswalk("1".equals(row.getCRSWK()))
-                .isOverpass("1".equals(row.getOVRP()))
-                .isBridge("1".equals(row.getBRG()))
-                .isTunnel("1".equals(row.getTNL()))
-                .isSubway("1".equals(row.getSBWY_NTW()))
-                .isPark("1".equals(row.getPARK()))
-                .isBuilding("1".equals(row.getBLDG()))
+                .isCrosswalk("1".equals(row.getCRSWK()) || "Y".equalsIgnoreCase(row.getCRSWK()))
+                .isOverpass("1".equals(row.getOVRP()) || "Y".equalsIgnoreCase(row.getOVRP()))
+                .isBridge("1".equals(row.getBRG()) || "Y".equalsIgnoreCase(row.getBRG()))
+                .isTunnel("1".equals(row.getTNL()) || "Y".equalsIgnoreCase(row.getTNL()))
+                .isSubway("1".equals(row.getSBWY_NTW()) || "Y".equalsIgnoreCase(row.getSBWY_NTW()))
+                .isPark("1".equals(row.getPARK()) || "Y".equalsIgnoreCase(row.getPARK()))
+                .isBuilding("1".equals(row.getBLDG()) || "Y".equalsIgnoreCase(row.getBLDG()))
                 .build();
     }
 
     /**
-     * 링크의 좌표를 기반으로 누락된 노드를 생성 (최소 정보만 부여)
+     * 링크 생성 (저장 안 함)
      */
-    private WalkingNode createBoundaryNode(String nodeId, String district, double lon, double lat) {
-        return WalkingNode.builder()
-                .nodeId(nodeId)
-                .longitude(lon)
-                .latitude(lat)
-                .district(district) // 현재 구역으로 임시 지정
-                .nodeType("MANUALLY_GENERATED") // 수동 생성 노드임을 표시
-                .neighborhood("UNKNOWN")
-                .isCrosswalk(false)
-                .isOverpass(false)
-                .isBridge(false)
-                .isTunnel(false)
-                .isSubway(false)
-                .isPark(false)
-                .isBuilding(false)
-                .build();
-    }
-
-    private WalkingLink createLinkFromApiRow(SeoulApiResponse.Row row, String district,
-                                             String startNodeId, String endNodeId, String linkId) {
+    private WalkingLink createLink(SeoulApiResponse.Row row, String districtName) {
         return WalkingLink.builder()
-                .linkId(linkId)
-                .startNodeId(startNodeId)
-                .endNodeId(endNodeId)
+                .linkId(row.getLNKG_ID())
+                .startNodeId(row.getBGNG_LNKG_ID())
+                .endNodeId(row.getEND_LNKG_ID())
                 .distance(row.getLNKG_LEN())
-                .district(district)
+                .district(districtName)
                 .isElevatedRoad("1".equals(row.getEXPN_CAR_RD()))
                 .isSubwayNetwork("1".equals(row.getSBWY_NTW()))
                 .isBridge("1".equals(row.getBRG()))
@@ -351,59 +201,98 @@ public class DataCollectionService {
                 .build();
     }
 
-    private double[] parsePoint(String wkt) {
+    /**
+     * 좌표로부터 노드 저장
+     */
+    private void saveNodeFromCoords(String nodeId, double[] coords, String districtName, SeoulApiResponse.Row row) {
         try {
-            String coords = wkt.replace("POINT(", "").replace(")", "").trim();
-            String[] parts = coords.split("\\s+");
-            return new double[]{
-                    Double.parseDouble(parts[0]),
-                    Double.parseDouble(parts[1])
-            };
+            WalkingNode node = WalkingNode.builder()
+                    .nodeId(nodeId)
+                    .latitude(coords[1])  // lat
+                    .longitude(coords[0]) // lng
+                    .nodeType("교차점")
+                    .district(districtName)
+                    .neighborhood(row.getEMD_NM())
+                    .isCrosswalk("1".equals(row.getCRSWK()) || "Y".equalsIgnoreCase(row.getCRSWK()))
+                    .isOverpass("1".equals(row.getOVRP()) || "Y".equalsIgnoreCase(row.getOVRP()))
+                    .isBridge("1".equals(row.getBRG()) || "Y".equalsIgnoreCase(row.getBRG()))
+                    .isTunnel("1".equals(row.getTNL()) || "Y".equalsIgnoreCase(row.getTNL()))
+                    .isSubway("1".equals(row.getSBWY_NTW()) || "Y".equalsIgnoreCase(row.getSBWY_NTW()))
+                    .isPark("1".equals(row.getPARK()) || "Y".equalsIgnoreCase(row.getPARK()))
+                    .isBuilding("1".equals(row.getBLDG()) || "Y".equalsIgnoreCase(row.getBLDG()))
+                    .build();
+
+            nodeRepository.save(node);
+
         } catch (Exception e) {
-            log.warn("POINT 파싱 실패: {}", wkt);
-            return new double[0];
+            log.warn("노드 저장 실패: {}, 에러: {}", nodeId, e.getMessage());
         }
     }
 
     /**
-     * LINESTRING WKT를 파싱하여 시작 노드의 좌표와 끝 노드의 좌표를 반환
-     * 반환 값: [startLon, startLat, endLon, endLat]
+     * 노드 저장
      */
-    private double[] parseLineString(String wkt) {
+    private void saveNode(SeoulApiResponse.Row row, String districtName) {
         try {
-            String coords = wkt.replace("LINESTRING(", "").replace(")", "").trim();
-            String[] parts = coords.split(",\\s*");
+            double[] coords = parsePoint(row.getNODE_WKT());
 
-            if (parts.length < 2) {
-                return new double[0];
-            }
+            WalkingNode node = WalkingNode.builder()
+                    .nodeId(row.getNODE_ID())
+                    .latitude(coords[1])
+                    .longitude(coords[0])
+                    .nodeType(row.getNODE_TYPE())
+                    .district(districtName)
+                    .neighborhood(row.getEMD_NM())
+                    .isCrosswalk("Y".equalsIgnoreCase(row.getCRSWK()))
+                    .isOverpass("Y".equalsIgnoreCase(row.getOVRP()))
+                    .isBridge("Y".equalsIgnoreCase(row.getBRG()))
+                    .isTunnel("Y".equalsIgnoreCase(row.getTNL()))
+                    .isSubway("Y".equalsIgnoreCase(row.getSBWY_NTW()))
+                    .isPark("Y".equalsIgnoreCase(row.getPARK()))
+                    .isBuilding("Y".equalsIgnoreCase(row.getBLDG()))
+                    .build();
 
-            // 시작점 (첫 번째 좌표)
-            String[] start = parts[0].trim().split("\\s+");
-            // 끝점 (마지막 좌표)
-            String[] end = parts[parts.length - 1].trim().split("\\s+");
+            nodeRepository.save(node);
 
-            if (start.length != 2 || end.length != 2) {
-                return new double[0];
-            }
-
-            return new double[]{
-                    Double.parseDouble(start[0]), // startLon
-                    Double.parseDouble(start[1]), // startLat
-                    Double.parseDouble(end[0]),   // endLon
-                    Double.parseDouble(end[1])    // endLat
-            };
         } catch (Exception e) {
-            log.error("LINESTRING 파싱 중 오류 발생: {}", wkt, e);
-            return new double[0];
+            log.warn("노드 저장 실패: {}, 에러: {}", row.getNODE_ID(), e.getMessage());
         }
     }
 
-    private String buildApiUrl(int start, int end, String districtName) {
-        return String.format("%s/%s/json/%s/%d/%d/%s",
-                baseUrl, apiKey, serviceName, start, end, districtName);
+    /**
+     * 링크 저장
+     */
+    private void saveLink(SeoulApiResponse.Row row, String districtName) {
+        try {
+            String startNodeId = row.getBGNG_LNKG_ID();
+            String endNodeId = row.getEND_LNKG_ID();
+
+            WalkingLink link = WalkingLink.builder()
+                    .linkId(row.getLNKG_ID())
+                    .startNodeId(startNodeId)
+                    .endNodeId(endNodeId)
+                    .distance(row.getLNKG_LEN())
+                    .district(districtName)
+                    .isElevatedRoad("1".equals(row.getEXPN_CAR_RD()))
+                    .isSubwayNetwork("1".equals(row.getSBWY_NTW()))
+                    .isBridge("1".equals(row.getBRG()))
+                    .isTunnel("1".equals(row.getTNL()))
+                    .isOverpass("1".equals(row.getOVRP()))
+                    .isCrosswalk("1".equals(row.getCRSWK()))
+                    .isPark("1".equals(row.getPARK()))
+                    .isBuilding("1".equals(row.getBLDG()))
+                    .build();
+
+            linkRepository.save(link);
+
+        } catch (Exception e) {
+            log.warn("링크 저장 실패: {}, 에러: {}", row.getLNKG_ID(), e.getMessage());
+        }
     }
 
+    /**
+     * 수집된 구역 정보 저장
+     */
     private void saveCollectedDistrict(String districtName, int nodeCount, int linkCount) {
         CollectedDistrict district = districtRepository
                 .findByDistrictName(districtName)
@@ -419,6 +308,53 @@ public class DataCollectionService {
         }
 
         districtRepository.save(district);
+    }
+
+    /**
+     * WKT LINESTRING 파싱
+     */
+    private List<double[]> parseLineString(String wkt) {
+        // "LINESTRING(126.840 37.489, 126.841 37.490)"
+        // → [[126.840, 37.489], [126.841, 37.490]]
+        List<double[]> result = new ArrayList<>();
+        try {
+            String coords = wkt.replace("LINESTRING(", "").replace(")", "").trim();
+            String[] points = coords.split(",");
+
+            for (String point : points) {
+                String[] parts = point.trim().split("\\s+");
+                if (parts.length >= 2) {
+                    result.add(new double[]{
+                            Double.parseDouble(parts[0]), // lng
+                            Double.parseDouble(parts[1])  // lat
+                    });
+                }
+            }
+        } catch (Exception e) {
+            log.warn("LINESTRING 파싱 실패: {}", wkt);
+        }
+        return result;
+    }
+
+    /**
+     * WKT POINT 파싱
+     */
+    private double[] parsePoint(String wkt) {
+        // "POINT(126.856 37.495)" → [126.856, 37.495]
+        String coords = wkt.replace("POINT(", "").replace(")", "").trim();
+        String[] parts = coords.split("\\s+");
+        return new double[]{
+                Double.parseDouble(parts[0]), // longitude
+                Double.parseDouble(parts[1])  // latitude
+        };
+    }
+
+    /**
+     * API URL 생성
+     */
+    private String buildApiUrl(int start, int end, String districtName) {
+        return String.format("%s/%s/json/%s/%d/%d/%s",
+                baseUrl, apiKey, serviceName, start, end, districtName);
     }
 
     /**
