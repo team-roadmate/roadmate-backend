@@ -33,7 +33,9 @@ public class AdminController {
 
         // 수집 성공 시 그래프 재구축
         if (Boolean.TRUE.equals(response.getSuccess())) {
+            log.info("데이터 수집 완료, 그래프 재구축 중...");
             graphService.rebuildGraph();
+            log.info("그래프 재구축 완료");
         }
 
         return ResponseEntity.ok(response);
@@ -45,6 +47,7 @@ public class AdminController {
      */
     @GetMapping("/districts")
     public ResponseEntity<List<DistrictInfo>> getCollectedDistricts() {
+        // ✅ 올바른 메서드 호출
         List<DistrictInfo> districts = dataCollectionService.getCollectedDistricts();
         return ResponseEntity.ok(districts);
     }
@@ -66,6 +69,9 @@ public class AdminController {
      */
     @GetMapping("/stats")
     public ResponseEntity<GraphService.GraphStats> getGraphStats() {
-        return ResponseEntity.ok(graphService.getStats());
+        GraphService.GraphStats stats = graphService.getStats();
+        log.info("그래프 통계 조회: 노드 {}, 간선 {}, 구역 {}",
+                stats.getNodeCount(), stats.getEdgeCount(), stats.getDistricts());
+        return ResponseEntity.ok(stats);
     }
 }
