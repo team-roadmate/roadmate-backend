@@ -26,6 +26,7 @@ public class DataCollectionService {
     private final WalkingLinkRepository linkRepository;
     private final DistrictRepository districtRepository;
     private final RestTemplate restTemplate;
+    private final GraphService graphService;
 
     @PersistenceContext
     private final EntityManager em;
@@ -251,11 +252,16 @@ public class DataCollectionService {
             // 최종 결과 저장
             saveCollectedDistrict(districtName, totalNodes, totalLinks);
 
+            // ✅ 그래프 재구축 (중요!)
+            log.info("그래프 재구축 시작...");
+            graphService.rebuildGraph();
+            log.info("그래프 재구축 완료");
+
             return CollectionResponse.builder()
                     .district(districtName)
                     .nodeCount(totalNodes)
                     .linkCount(totalLinks)
-                    .message("데이터 수집 완료 (2단계 전략 및 노드 자동 보정)")
+                    .message("데이터 수집 및 그래프 재구축 완료")
                     .success(true)
                     .build();
 
