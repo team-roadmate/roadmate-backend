@@ -54,7 +54,7 @@ public class PathFindingService {
 
             // 4. 노드 ID → 좌표 변환
             List<Coordinate> coordinates = result.pathNodeIds.stream()
-                    .map(graphService::getNode)
+                    .map(nodeId -> graphService.getNode(nodeId))
                     .filter(Objects::nonNull)
                     .map(node -> new Coordinate(node.getLat(), node.getLng()))
                     .toList();
@@ -165,7 +165,7 @@ public class PathFindingService {
             current = previous.get(current);
         }
 
-        if (path.isEmpty() || !path.getLast().equals(start)) {
+        if (path.isEmpty() || !path.get(path.size() - 1).equals(start)) {
             return Collections.emptyList();
         }
 
@@ -221,6 +221,10 @@ public class PathFindingService {
     private static class NodeDistance implements Comparable<NodeDistance> {
         private String nodeId;
         private Double distance;
+
+        public Double getDistance() {
+            return this.distance;
+        }
 
         @Override
         public int compareTo(NodeDistance other) {
