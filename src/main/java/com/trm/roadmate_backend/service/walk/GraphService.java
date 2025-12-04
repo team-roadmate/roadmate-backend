@@ -35,15 +35,16 @@ public class GraphService {
             log.info("노드 로드 완료: {} 개", nodes.size());
 
             nodes.forEach(n -> {
+                String nodeId = n.getNodeId().trim();
                 Node node = new Node(
-                        n.getNodeId(),
+                        nodeId,
                         n.getLatitude(),
                         n.getLongitude(),
                         n.getDistrict(),
                         n.getIsPark()
                 );
-                nodeMap.put(n.getNodeId(), node);
-                adjacencyList.put(n.getNodeId(), new ArrayList<>());
+                nodeMap.put(nodeId, node);
+                adjacencyList.put(nodeId, new ArrayList<>());
             });
 
             // 2. 모든 링크 로드
@@ -51,8 +52,18 @@ public class GraphService {
             log.info("링크 로드 완료: {} 개", links.size());
 
             links.forEach(l -> {
+                String startId = l.getStartNodeId().trim();
+                String endId = l.getEndNodeId().trim();
+
+                // 💡 [수정] 노드 맵에 키가 존재하는지 확인 및 누락 로그 출력
+                if (!nodeMap.containsKey(startId) || !nodeMap.containsKey(endId)) {
+                    log.warn("누락 링크 발생: Link ID {} ({}) -> ({}) - 노드 맵에 없음 (ID 불일치 가능성)",
+                            l.getLinkId(), startId, endId);
+                    return;
+                }
+
                 Edge edge = new Edge(
-                        l.getEndNodeId(),
+                        endId,
                         l.getDistance(),
                         l.getIsPark(),
                         l.getIsOverpass(),
@@ -60,23 +71,26 @@ public class GraphService {
                         l.getIsBuilding()
                 );
 
-                // 양방향 그래프
-                adjacencyList.computeIfAbsent(l.getStartNodeId(), k -> new ArrayList<>()).add(edge);
+                // 양방향 그래프 (startId -> endId)
+                adjacencyList.computeIfAbsent(startId, k -> new ArrayList<>()).add(edge);
 
                 Edge reverseEdge = new Edge(
-                        l.getStartNodeId(),
+                        startId,
                         l.getDistance(),
                         l.getIsPark(),
                         l.getIsOverpass(),
                         l.getIsTunnel(),
                         l.getIsBuilding()
                 );
-                adjacencyList.computeIfAbsent(l.getEndNodeId(), k -> new ArrayList<>()).add(reverseEdge);
+                // 양방향 그래프 (endId -> startId)
+                adjacencyList.computeIfAbsent(endId, k -> new ArrayList<>()).add(reverseEdge);
             });
+
+            long edgeCount = adjacencyList.values().stream().mapToInt(List::size).sum();
 
             long endTime = System.currentTimeMillis();
             log.info("=== 그래프 구축 완료: 노드 {}, 간선 {}, 소요시간 {}ms ===",
-                    nodeMap.size(), links.size() * 2, endTime - startTime);
+                    nodeMap.size(), edgeCount, endTime - startTime);
 
         } catch (Exception e) {
             log.error("그래프 구축 실패: {}", e.getMessage(), e);

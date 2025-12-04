@@ -15,9 +15,13 @@ public class JwtUtil {
     @Value("${jwt.secret}")
     private String SECRET_KEY;
 
-    // application.yml/properties에서 JWT 만료 시간 주입 (밀리초)
-    @Value("${jwt.expiration}")
-    private long EXPIRATION;
+    // application.yml/properties에서 ACCESS TOKEN 만료 시간 주입 (밀리초)
+    @Value("${jwt.access.expiration}")
+    private long ACCESS_EXPIRATION;
+
+    // application.yml/properties에서 REFRESH TOKEN 만료 시간 주입 (밀리초)
+    @Value("${jwt.refresh.expiration}")
+    private long REFRESH_EXPIRATION;
 
     // HMAC SHA 키 생성을 위한 시그니처 키 반환
     private Key getSigningKey() {
@@ -25,15 +29,30 @@ public class JwtUtil {
     }
 
     /**
-     * 특정 사용자 이메일을 기반으로 JWT 토큰을 생성합니다.
+     * 특정 사용자 이메일을 기반으로 ACCESS JWT 토큰을 생성합니다.
      * @param email 토큰에 담을 사용자 이메일 (Subject)
-     * @return 생성된 JWT 문자열
+     * @return 생성된 액세스 토큰 JWT 문자열
      */
-    public String generateToken(String email) {
+    public String generateAccessToken(String email) {
         return Jwts.builder()
                 .setSubject(email)
                 .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION))
+                .setExpiration(new Date(System.currentTimeMillis() + ACCESS_EXPIRATION))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    /**
+     * 특정 사용자 이메일을 기반으로 REFRESH JWT 토큰을 생성합니다.
+     * 리프레시 토큰은 만료 시간만 길고, 일반적으로 클레임에 추가 정보를 담지 않습니다.
+     * @param email 토큰에 담을 사용자 이메일 (Subject)
+     * @return 생성된 리프레시 토큰 JWT 문자열
+     */
+    public String generateRefreshToken(String email) {
+        return Jwts.builder()
+                .setSubject(email)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + REFRESH_EXPIRATION))
                 .signWith(getSigningKey(), SignatureAlgorithm.HS256)
                 .compact();
     }
@@ -44,6 +63,7 @@ public class JwtUtil {
      * @return 추출된 사용자 이메일
      */
     public String extractEmail(String token) {
+        // 기존과 동일
         return Jwts.parserBuilder()
                 .setSigningKey(getSigningKey())
                 .build()

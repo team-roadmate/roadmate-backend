@@ -6,7 +6,7 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 
 @Repository
-public interface CollectedDistrictRepository extends JpaRepository<CollectedDistrict, Long> {
+public interface DistrictRepository extends JpaRepository<CollectedDistrict, Long> {
 
     // 구역명으로 조회
     Optional<CollectedDistrict> findByDistrictName(String districtName);
