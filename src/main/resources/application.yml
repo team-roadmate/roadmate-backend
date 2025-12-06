@@ -86,3 +86,30 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# 📖 SpringDoc OpenAPI/Swagger UI 설정 (⭐ 이 부분을 logging 아래에 위치시켰습니다)
+springdoc:
+  # 🔑 오류 해결 핵심 설정: Generic Response 자동 분석 비활성화
+  override-with-generic-response: false
+
+  swagger-ui:
+    # UI 접속 경로 지정
+    path: /swagger-ui.html
+    # API 문서 접속 시도 시 엔드포인트 자동 정렬
+    display-operation-id: true
+    # 문서 엔드포인트 리스트 정렬 기준 (alpha, method, none)
+    operations-sorter: alpha
+
+  # OpenAPI Info 설정 (문서 제목, 설명, 버전)
+  info:
+    title: ${spring.application.name} API Documentation 🚗
+    description: "RoadMate 백엔드 서비스의 모든 API 명세입니다."
+    version: "v1.0.0"
+    terms-of-service: "http://example.com/terms/"
+    contact:
+      name: "개발팀"
+      url: "http://example.com/contact"
+      email: "dev@example.com"
+    license:
+      name: "Apache 2.0"
+      url: "http://www.apache.org/licenses/LICENSE-2.0.html"
