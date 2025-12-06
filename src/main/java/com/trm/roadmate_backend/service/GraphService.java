@@ -1,42 +1,49 @@
 package com.trm.roadmate_backend.service;
 
 import com.trm.roadmate_backend.entity.Node;
+import com.trm.roadmate_backend.entity.Link;
 import com.trm.roadmate_backend.repository.LinkRepository;
 import com.trm.roadmate_backend.repository.NodeRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class GraphService {
-    /**
-     * 모든 노드 객체의 컬렉션을 반환하여 좌표 스냅핑에 사용됩니다.
-     */
-    public Collection<Node> getAllNodes() {
-        return nodeMap.values();
-    }
+
+    // --- 인메모리 그래프 ---
+    private final Map<String, List<Edge>> adjacencyMap = new HashMap<>();
+    private final Map<String, Node> nodeMap = new HashMap<>();
 
     private final NodeRepository nodeRepository;
     private final LinkRepository linkRepository;
 
-    // 인접 리스트: [출발 노드 ID] -> [연결된 간선(Edge) 리스트]
-    private final Map<String, List<Edge>> adjacencyMap = new HashMap<>();
-    // 노드 좌표 맵: [노드 ID] -> [노드 객체]
-    private final Map<String, Node> nodeMap = new HashMap<>();
+    // --- Public API ---
+    public Collection<Node> getAllNodes() {
+        return nodeMap.values();
+    }
 
-    /**
-     * 경로 탐색에 사용되는 간선(Edge) 클래스.
-     * 도착 노드와 가중치(거리)를 저장합니다.
-     */
+    public List<Edge> getEdges(String nodeId) {
+        return adjacencyMap.getOrDefault(nodeId, Collections.emptyList());
+    }
+
+    public Node getNode(String nodeId) {
+        return nodeMap.get(nodeId);
+    }
+
+    // Edge 클래스
     public static class Edge {
         public final String destinationId;
-        public final double weight; // Link.length
+        public final double weight;
 
         public Edge(String destinationId, double weight) {
             this.destinationId = destinationId;
@@ -44,67 +51,75 @@ public class GraphService {
         }
     }
 
-    /**
-     * 애플리케이션 시작 시 DB의 모든 노드와 링크 정보를 로드하여
-     * 인메모리 그래프(adjacencyMap, nodeMap)를 구성합니다.
-     */
+    // --- 초기화 & 재로딩 ---
     @PostConstruct
     @Transactional(readOnly = true)
-    public void loadGraphData() {
-        long startTime = System.currentTimeMillis();
+    public void init() {
+        buildGraph();
+    }
 
-        // 기존 데이터 초기화
+    @Transactional(readOnly = true)
+    public synchronized void reloadGraph() {
+        log.info("Graph reload requested");
+        buildGraph();
+    }
+
+    // --- 그래프 빌드 ---
+    @Transactional(readOnly = true)
+    protected void buildGraph() {
+        long startTime = System.currentTimeMillis();
         adjacencyMap.clear();
         nodeMap.clear();
 
-        // Step 1: 모든 노드 정보를 로드하여 nodeMap 구성
-        nodeRepository.findAll().forEach(node -> {
-            nodeMap.put(node.getNodeId(), node);
-        });
+        log.info("Loading nodes from DB...");
 
-        // Step 2: 모든 링크 정보를 로드하여 adjacencyMap 구성 (양방향 연결)
-        linkRepository.findAll().forEach(link -> {
-            // 정방향 (Start -> End)
-            // 주의: DB에 저장된 length를 가중치로 사용
-            addEdge(link.getStartNodeId(), link.getEndNodeId(), link.getLength());
+        // 1) 모든 노드 로딩 (페이징)
+        int page = 0;
+        int size = 5000;
+        Page<Node> nodePage;
+        AtomicInteger totalNodes = new AtomicInteger(0);
 
-            // 역방향 (End -> Start) - 도보 네트워크의 대다수는 양방향 통행을 가정
-            addEdge(link.getEndNodeId(), link.getStartNodeId(), link.getLength());
-        });
+        do {
+            nodePage = nodeRepository.findAll(PageRequest.of(page++, size));
+            nodePage.forEach(node -> nodeMap.put(node.getNodeId(), node));
+            totalNodes.addAndGet(nodePage.getNumberOfElements());
+        } while (nodePage.hasNext());
+
+        log.info("Total nodes loaded: {}", totalNodes.get());
+
+        log.info("Loading links from DB...");
+
+        // 2) 모든 링크 로딩 (페이징)
+        page = 0;
+        size = 5000;
+        Page<Link> linkPage;
+        AtomicInteger totalEdges = new AtomicInteger(0);
+
+        do {
+            linkPage = linkRepository.findAll(PageRequest.of(page++, size));
+            linkPage.forEach(link -> {
+                double length = link.getLength() == null ? 0.0 : link.getLength();
+
+                if (!nodeMap.containsKey(link.getStartNodeId())) {
+                    log.warn("Missing start node for edge {} -> {}", link.getStartNodeId(), link.getEndNodeId());
+                } else if (!nodeMap.containsKey(link.getEndNodeId())) {
+                    log.warn("Missing end node for edge {} -> {}", link.getStartNodeId(), link.getEndNodeId());
+                } else {
+                    addEdge(link.getStartNodeId(), link.getEndNodeId(), length);
+                    addEdge(link.getEndNodeId(), link.getStartNodeId(), length);
+                    totalEdges.addAndGet(2); // 양방향
+                }
+            });
+        } while (linkPage.hasNext());
 
         long endTime = System.currentTimeMillis();
-
         log.info("⭐ Graph Loaded Success ⭐");
         log.info("Total Nodes = {}", nodeMap.size());
-        log.info("Total Edges = {}", adjacencyMap.values().stream().mapToLong(List::size).sum());
-        log.info("Loading Time: {} ms", (endTime - startTime));
+        log.info("Total Edges = {}", totalEdges.get());
+        log.info("Graph Loading Time: {} ms", (endTime - startTime));
     }
 
-    /**
-     * 특정 노드 ID에서 연결된 모든 간선(Edge) 리스트를 반환합니다.
-     * @param nodeId 출발 노드 ID
-     * @return 연결된 Edge 리스트
-     */
-    public List<Edge> getEdges(String nodeId) {
-        return adjacencyMap.getOrDefault(nodeId, Collections.emptyList());
-    }
-
-    /**
-     * 특정 노드 ID의 좌표 정보를 포함한 Node 객체를 반환합니다.
-     * @param nodeId 노드 ID
-     * @return Node 객체 (좌표 정보 포함)
-     */
-    public Node getNode(String nodeId) {
-        return nodeMap.get(nodeId);
-    }
-
-    // --- Private Helper Methods ---
-
-    /**
-     * 인접 리스트에 새로운 간선을 추가합니다.
-     */
     private void addEdge(String source, String destination, double weight) {
-        // computeIfAbsent: source 키가 없으면 새 ArrayList를 생성하고 값을 넣은 후 리턴
         adjacencyMap.computeIfAbsent(source, k -> new ArrayList<>())
                 .add(new Edge(destination, weight));
     }
