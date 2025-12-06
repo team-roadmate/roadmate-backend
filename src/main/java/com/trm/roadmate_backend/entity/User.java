@@ -31,13 +31,6 @@ public class User {
 
     private Integer age;
 
-    /**
-     * 선호 카테고리: 지연 로딩(FetchType.LAZY) 설정으로 성능 최적화
-     */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "preferred_category", foreignKey = @ForeignKey(name = "fk_user_category"))
-    private Category preferredCategory;
-
     @Column(name = "profile_image_url", length = 500)
     private String profileImageUrl;
 

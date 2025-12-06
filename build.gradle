@@ -35,6 +35,12 @@ dependencies {
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
 
+    // 💡 추가: 보행 네트워크 기능에 필요한 JSON 파싱 라이브러리
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // 💡 추가: 지리 정보(WKT) 처리를 위한 JTS Core
+    implementation 'org.locationtech.jts:jts-core:1.19.0'
+
     // 테스트
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
@@ -48,7 +54,8 @@ dependencies {
     // Validation
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
-    // JSON 파싱 (Spring Boot 기본 포함일 수 있음)
+    // JSON 파싱 (Spring Boot 기본 포함일 수 있음) - 이미 jackson-databind가 있지만,
+    // 기존 코드에서 Gson을 사용했으므로 의존성 유지.
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 }
 
