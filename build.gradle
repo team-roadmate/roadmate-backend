@@ -57,6 +57,8 @@ dependencies {
     // JSON 파싱 (Spring Boot 기본 포함일 수 있음) - 이미 jackson-databind가 있지만,
     // 기존 코드에서 Gson을 사용했으므로 의존성 유지.
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.4.0'
 }
 
 tasks.named('test') {

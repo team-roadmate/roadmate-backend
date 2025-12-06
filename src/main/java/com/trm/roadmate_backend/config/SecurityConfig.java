@@ -18,6 +18,15 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
 
+    // ⭐️ [추가된 부분 1] Swagger UI 및 API 문서 관련 경로 정의
+    private static final String[] SWAGGER_WHITELIST = {
+            "/v3/api-docs/**",      // OpenAPI 3 (JSON/YAML)
+            "/swagger-ui/**",       // Swagger UI HTML 및 리소스 (버전 3 이상)
+            "/swagger-resources/**",
+            "/swagger-ui.html",
+            "/webjars/**"
+    };
+
     /**
      * 비밀번호 암호화를 위한 BCryptPasswordEncoder 빈 등록
      */
@@ -46,8 +55,12 @@ public class SecurityConfig {
 
                 // 4. 요청별 접근 권한 설정 (인가)
                 .authorizeHttpRequests(auth -> auth
-                        // 로그인, 회원가입, 에러 경로는 인증 없이 접근 허용
+                        // ⭐️ [수정/추가된 부분 2] Swagger 경로를 인증 없이 접근 허용
+                        .requestMatchers(SWAGGER_WHITELIST).permitAll()
+
+                        // 로그인, 회원가입, 에러 경로는 인증 없이 접근 허용 (기존 로직)
                         .requestMatchers("/api/auth/**", "/error").permitAll()
+
                         // 그 외 모든 요청은 인증된 사용자만 접근 허용
                         .anyRequest().authenticated()
                 );
