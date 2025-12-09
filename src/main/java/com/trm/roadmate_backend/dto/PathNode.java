@@ -11,9 +11,7 @@ import lombok.ToString;
 @RequiredArgsConstructor
 @ToString
 public class PathNode {
-    // 💡 nodeId 필드 제거
+    private String nodeId;  // ⭐ 추가
     private final double latitude;
     private final double longitude;
-
-    // PathNode.java는 이대로 사용합니다.
 }
