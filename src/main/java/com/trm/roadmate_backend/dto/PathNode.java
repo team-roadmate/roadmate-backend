@@ -11,7 +11,6 @@ import lombok.ToString;
 @RequiredArgsConstructor
 @ToString
 public class PathNode {
-    private String nodeId;  // ⭐ 추가
     private final double latitude;
     private final double longitude;
 }

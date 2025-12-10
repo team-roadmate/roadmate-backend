@@ -5,14 +5,12 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-// ==================== 3. LoopPathRequest ====================
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor
 public class LoopPathRequest {
-    private Double startLat;
-    private Double startLng;
-    private Double viaLat;
-    private Double viaLng;
-    private Double targetDistanceKm;       // 목표 거리 (km)
+    private Double startLat;              // 시작 지점 위도
+    private Double startLng;              // 시작 지점 경도
+    private Double viaLat;                // 중간 경유지 위도
+    private Double viaLng;                // 중간 경유지 경도
+    private Double targetDistanceKm;      // 목표 거리 (km)
     private Integer tolerancePercent = 15; // 오차 허용 (기본 15%)
-    private String detourDirection = "auto"; // auto, north, south, east, west
 }
