@@ -86,6 +86,19 @@ public class WalkRouteService {
         route.delete();
     }
 
+    /**
+     * 특정 routeId의 산책 기록을 조회합니다. (소유권 검증 포함)
+     * @param routeId 조회할 경로 ID
+     * @param userId 현재 사용자 ID
+     * @return WalkRoute 엔티티
+     * @throws UnauthorizedUserException 해당 경로를 찾을 수 없거나 접근 권한이 없을 경우
+     */
+    public WalkRoute getRouteById(Long routeId, Integer userId) {
+        // routeId와 userId를 모두 사용하여 경로를 찾고, isDeleted=false인 경우만 가져옴
+        return walkRouteRepository.findByRouteIdAndUserIdAndIsDeleted(routeId, userId, false)
+                .orElseThrow(() -> new UnauthorizedUserException("해당 경로를 찾을 수 없거나 접근 권한이 없습니다."));
+    }
+
     public List<WalkRoute> getHistory(Integer userId) {
         return walkRouteRepository.findByUserIdAndIsDeletedOrderByStartTimeDesc(userId, false);
     }
