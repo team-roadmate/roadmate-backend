@@ -44,10 +44,12 @@ public class GraphService {
     public static class Edge {
         public final String destinationId;
         public final double weight;
+        public final String linkId;  // ⭐ 추가
 
-        public Edge(String destinationId, double weight) {
+        public Edge(String destinationId, double weight, String linkId) {
             this.destinationId = destinationId;
             this.weight = weight;
+            this.linkId = linkId;
         }
     }
 
@@ -105,9 +107,9 @@ public class GraphService {
                 } else if (!nodeMap.containsKey(link.getEndNodeId())) {
                     log.warn("Missing end node for edge {} -> {}", link.getStartNodeId(), link.getEndNodeId());
                 } else {
-                    addEdge(link.getStartNodeId(), link.getEndNodeId(), length);
-                    addEdge(link.getEndNodeId(), link.getStartNodeId(), length);
-                    totalEdges.addAndGet(2); // 양방향
+                    addEdge(link.getStartNodeId(), link.getEndNodeId(), length, link.getLinkId());
+                    addEdge(link.getEndNodeId(), link.getStartNodeId(), length, link.getLinkId());
+                    totalEdges.addAndGet(2);
                 }
             });
         } while (linkPage.hasNext());
@@ -119,8 +121,8 @@ public class GraphService {
         log.info("Graph Loading Time: {} ms", (endTime - startTime));
     }
 
-    private void addEdge(String source, String destination, double weight) {
+    private void addEdge(String source, String destination, double weight, String linkId) {
         adjacencyMap.computeIfAbsent(source, k -> new ArrayList<>())
-                .add(new Edge(destination, weight));
+                .add(new Edge(destination, weight, linkId));
     }
 }

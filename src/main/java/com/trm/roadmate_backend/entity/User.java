@@ -1,10 +1,11 @@
 package com.trm.roadmate_backend.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
-import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
-import com.fasterxml.jackson.annotation.JsonIgnore;
+
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "user")
@@ -33,6 +34,13 @@ public class User {
 
     @Column(name = "profile_image_url", length = 500)
     private String profileImageUrl;
+
+    /**
+     * [추가된 필드] 리프레시 토큰 저장용 필드 (RTR 구현을 위해 필수)
+     */
+    @Column(name = "refresh_token", length = 500)
+    @JsonIgnore
+    private String refreshToken;
 
     /**
      * 생성 시간: 최초 저장 시 자동 설정되며, 업데이트 불가능
